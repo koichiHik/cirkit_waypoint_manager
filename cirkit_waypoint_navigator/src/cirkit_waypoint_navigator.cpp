@@ -51,13 +51,22 @@ class WayPoint {
  public:
   WayPoint();
   WayPoint(move_base_msgs::MoveBaseGoal goal, WayPointType waypoint_type, double reach_threshold)
-      : goal_(goal), waypoint_type_(waypoint_type), reach_threshold_(reach_threshold) {}
+      : goal_(goal),
+        waypoint_type_(waypoint_type),
+        reach_threshold_(reach_threshold),
+        user_input_received_(false) {}
   ~WayPoint() {}  // FIXME: Don't declare destructor!!
 
   WayPointType GetWayPointType() { return waypoint_type_; }
+  bool WaitUserInput() {
+    bool tmp_user_input_received_ = user_input_received_;
+    user_input_received_ = true;
+    return waypoint_type_ == WayPointType::WAIT_USER_INPUT && !tmp_user_input_received_;
+  }
   move_base_msgs::MoveBaseGoal goal_;
   WayPointType waypoint_type_;
   double reach_threshold_;
+  bool user_input_received_;
 };
 
 class CirkitWaypointNavigator {
@@ -74,13 +83,13 @@ class CirkitWaypointNavigator {
 
   int ReadWaypointFile(std::string filename);
 
-  WayPoint RetrieveNextWaypoint();
+  std::shared_ptr<WayPoint> RetrieveNextWaypoint();
 
   bool IsFinalGoal();
 
   double ComputeDistanceToWaypoint(geometry_msgs::Pose a, geometry_msgs::Pose b);
 
-  void SendNextGoal(WayPoint waypoint);
+  void SendNextGoal(const WayPoint& waypoint);
 
   double GetWaypointReachThreshold();
 
@@ -94,7 +103,7 @@ class CirkitWaypointNavigator {
   MoveBaseClient ac_;
   RobotBehaviors::State robot_behavior_state_;
   ros::Rate rate_;
-  std::vector<WayPoint> waypoints_buff_;
+  std::vector<std::shared_ptr<WayPoint>> waypoints_buff_;
   ros::NodeHandle nh_;
   tf::TransformListener listener_;
   int target_waypoint_index_;           // 次に目指すウェイポイントのインデックス
@@ -132,7 +141,7 @@ CirkitWaypointNavigator::CirkitWaypointNavigator() : ac_("move_base", true), rat
 
 CirkitWaypointNavigator::~CirkitWaypointNavigator() { this->CancelGoal(); }
 
-void CirkitWaypointNavigator::SendNewGoal(geometry_msgs::Pose pose) {
+void CirkitWaypointNavigator::SendNewGoal(const geometry_msgs::Pose pose) {
   move_base_msgs::MoveBaseGoal goal;
   goal.target_pose.pose = pose;
   goal.target_pose.header.frame_id = "map";
@@ -196,18 +205,16 @@ int CirkitWaypointNavigator::ReadWaypointFile(std::string filename) {
       waypoint.target_pose.pose.orientation.y = data[4];
       waypoint.target_pose.pose.orientation.z = data[5];
       waypoint.target_pose.pose.orientation.w = data[6];
-      waypoints_buff_.push_back(
-          WayPoint(waypoint, static_cast<WayPointType>((int)data[7]), data[8] / 2.0));
+      waypoints_buff_.push_back(std::shared_ptr<WayPoint>(
+          new WayPoint(waypoint, static_cast<WayPointType>((int)data[7]), data[8] / 2.0)));
     }
   }
   return 0;
 }
 
-WayPoint CirkitWaypointNavigator::RetrieveNextWaypoint() {
+std::shared_ptr<WayPoint> CirkitWaypointNavigator::RetrieveNextWaypoint() {
   ROS_INFO_STREAM("Next Waypoint : " << target_waypoint_index_);
-  WayPoint next_waypoint = waypoints_buff_[target_waypoint_index_];
-  target_waypoint_index_++;
-  return next_waypoint;
+  return waypoints_buff_[target_waypoint_index_++];
 }
 
 bool CirkitWaypointNavigator::IsFinalGoal() {
@@ -224,7 +231,7 @@ double CirkitWaypointNavigator::ComputeDistanceToWaypoint(geometry_msgs::Pose a,
 }
 
 // 通常のwaypointの場合
-void CirkitWaypointNavigator::SendNextGoal(WayPoint waypoint) {
+void CirkitWaypointNavigator::SendNextGoal(const WayPoint& waypoint) {
   reach_threshold_ = waypoint.reach_threshold_;
   this->SendNextWaypointMarker(waypoint.goal_.target_pose.pose,
                                0);  // 現在目指しているwaypointを表示する
@@ -255,10 +262,10 @@ void CirkitWaypointNavigator::Run() {
   // X. Process running loop.
   while (ros::ok()) {
     bool is_set_next_as_target = false;
-    WayPoint next_waypoint = this->RetrieveNextWaypoint();
+    std::shared_ptr<WayPoint> next_waypoint = this->RetrieveNextWaypoint();
 
     // X. Wait user input if necessary.
-    if (next_waypoint.GetWayPointType() == WayPointType::WAIT_USER_INPUT) {
+    if (next_waypoint->WaitUserInput()) {
       ROS_INFO("Wait for key input from user.....");
       getchar();
     }
@@ -267,7 +274,7 @@ void CirkitWaypointNavigator::Run() {
     {
       ROS_GREEN_STREAM("Next WayPoint is got");
       ROS_INFO("Go next_waypoint.");
-      this->SendNextGoal(next_waypoint);
+      this->SendNextGoal(*next_waypoint);
       robot_behavior_state_ = RobotBehaviors::WAYPOINT_NAV;
     }
 
