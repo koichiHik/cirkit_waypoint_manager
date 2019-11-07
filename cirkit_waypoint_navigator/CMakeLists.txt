@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(cirkit_waypoint_navigator)
 
+find_package(OpenCV REQUIRED)
+
 find_package(catkin REQUIRED COMPONENTS
   actionlib
   geometry_msgs
@@ -12,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   tf
+  nav_msgs
   visualization_msgs
 )
 
@@ -41,6 +44,7 @@ catkin_package(
     roscpp
     roslib
     sensor_msgs
+    nav_msgs
     tf
     visualization_msgs
   DEPENDS EIGEN
@@ -66,6 +70,7 @@ add_dependencies(cirkit_waypoint_navigator_node ${${PROJECT_NAME}_EXPORTED_TARGE
 ## Specify libraries to link a library or executable target against
 target_link_libraries(cirkit_waypoint_navigator_node
   ${catkin_LIBRARIES}
+  ${OpenCV_LIBS}
 )
 
 #############
