@@ -47,14 +47,12 @@ enum State {
   WAYPOINT_NAV,
   WAYPOINT_REACHED_GOAL,
   WAYPOINT_NAV_PLANNING_ABORTED,
-  WAIT_OBSTACLE,
 };
 }
 
 enum WayPointType {
   NORMAL,
   WAIT_USER_INPUT,
-  WAIT_OBSTACLE,
 };
 
 class WayPoint {
@@ -126,7 +124,6 @@ private:
   ros::Publisher cmd_vel_pub_, next_waypoint_marker_pub_;
   ros::Subscriber local_cost_map_sub_;
   std::shared_ptr<WayPoint> next_waypoint_;
-  double tube1_obst_dist_, tube2_obst_dist_;
 };
 
 CirkitWaypointNavigator::CirkitWaypointNavigator()
@@ -289,7 +286,6 @@ bool FindNearestObstableInTube(const cv::Mat &rotated_mat, double resolution,
                                double tube_width, double &dist_to_obst) {
 
   static const int8_t OBSTACLE_VALUE = 100;
-  static const double OBSTACLE_NOT_FOUND = 100.0;
 
   int rows = rotated_mat.rows;
   int cols = rotated_mat.cols;
@@ -307,7 +303,6 @@ bool FindNearestObstableInTube(const cv::Mat &rotated_mat, double resolution,
       }
     }
   }
-  dist_to_obst = OBSTACLE_NOT_FOUND;
   return false;
 }
 
@@ -340,22 +335,26 @@ void CirkitWaypointNavigator::HandleLocalCostMap(
   cv::warpAffine(mat, rotated_mat, rot, cv::Size(cols, rows),
                  cv::INTER_NEAREST);
 
-  bool obst_found_in_tube1 = FindNearestObstableInTube(
-      rotated_mat, grid_map->info.resolution, 0.8, tube1_obst_dist_);
-  bool obst_found_in_tube2 = FindNearestObstableInTube(
-      rotated_mat, grid_map->info.resolution, 2.0, tube2_obst_dist_);
+  double dist_obst;
+  bool obst_found = FindNearestObstableInTube(
+      rotated_mat, grid_map->info.resolution, 4.0, dist_obst);
 
   double dist_waypoint = std::sqrt((next_y - robo_y) * (next_y - robo_y) +
                                    (next_x - robo_x) * (next_x - robo_x));
+  ROS_ERROR("Distance between next waypoint : %lf", dist);
+  ROS_ERROR("Closest Obstable Distance : %lf", obst_dist);
+
+  cv::imshow("Test", mat);
+  cv::imshow("Roatated", rotated_mat);
+  cv::waitKey(1);
 }
 
 void CirkitWaypointNavigator::Run() {
   robot_behavior_state_ = RobotBehaviors::INIT_NAV;
-  static const double TUBE1_OBST_DIST = 0.5;
 
   // X. Process running loop.
   while (ros::ok()) {
-
+    bool is_set_next_as_target = false;
     next_waypoint_ = this->RetrieveNextWaypoint();
 
     // X. Wait user input if necessary.
@@ -368,61 +367,71 @@ void CirkitWaypointNavigator::Run() {
       getchar();
     }
 
-    // X. Wait till obstacle to be removed.
-    if (next_waypoint_->waypoint_type_ == WayPointType::WAIT_OBSTACLE) {
-      while (ros::ok()) {
-
-        ROS_INFO("Waiting obstable to be removed....");
-        if (TUBE1_OBST_DIST < tube1_obst_dist_) {
-          ROS_INFO("Obstable removed! Start moving!");
-          break;
-        }
-
-        rate_.sleep();
-        ros::spinOnce();
-      }
-    }
-
-    // X. Consume current waypoint.
+    // X. Next Waypoint.
     {
-      // X. Send Next Waypoint.
+      ROS_GREEN_STREAM("Next WayPoint is got");
       ROS_INFO("Go next_waypoint.");
       this->SendNextGoal(*next_waypoint_);
       robot_behavior_state_ = RobotBehaviors::WAYPOINT_NAV;
+    }
 
-      // X. Time that this waypoint starts.
-      ros::Time cur_waypnt_start_time = ros::Time::now();
+    // X. Time that this waypoint starts.
+    ros::Time cur_waypnt_start_time = ros::Time::now();
+    ros::Time verbose_start = ros::Time::now();
+    double last_distance_to_goal = 0;
+    double delta_distance_to_goal = 1.0; // 0.1[m]より大きければよい
 
-      // X. Loop till robot state changed.
-      while (ros::ok()) {
-        geometry_msgs::Pose robot_current_position =
-            this->GetRobotCurrentPosition();
-        geometry_msgs::Pose current_goal_position =
-            this->GetCurrentGoalPosition();
+    // X. Loop till robot state changed.
+    while (ros::ok()) {
+      geometry_msgs::Pose robot_current_position =
+          this->GetRobotCurrentPosition();
+      geometry_msgs::Pose current_goal_position =
+          this->GetCurrentGoalPosition();
 
-        // X. Compute distance to reach targeted waypoint.
-        double distance_to_goal = this->ComputeDistanceToWaypoint(
-            robot_current_position, current_goal_position);
+      // X. Compute distance to reach targeted waypoint.
+      double distance_to_goal = this->ComputeDistanceToWaypoint(
+          robot_current_position, current_goal_position);
 
+      // X. Judge if robot is stuck.
+      delta_distance_to_goal = last_distance_to_goal - distance_to_goal;
+      if (delta_distance_to_goal < 0.1) {
+        // X. Judge based on spent time in current waypoint.
+        ros::Duration spent_time_in_cur_waypnt =
+            ros::Time::now() - cur_waypnt_start_time;
+        if (spent_time_in_cur_waypnt.toSec() > 10.0) {
+          if (robot_behavior_state_ == RobotBehaviors::WAYPOINT_NAV) {
+            robot_behavior_state_ = RobotBehaviors::
+                WAYPOINT_NAV_PLANNING_ABORTED; // プランニング失敗とする
+            break;
+          } else {
+            break;
+          }
+        } else { // 30秒おきに進捗を報告する
+          ros::Duration verbose_time = ros::Time::now() - verbose_start;
+          if (verbose_time.toSec() > 30.0) {
+            ROS_INFO_STREAM("Waiting Abort: passed 30s, Distance to goal: "
+                            << distance_to_goal);
+            verbose_start = ros::Time::now();
+          }
+        }
+      } else {
         // X. Robot is not stuck.
+        last_distance_to_goal = distance_to_goal;
         cur_waypnt_start_time = ros::Time::now();
+      }
 
-        // X. Check if waypoint has to be updated.
-        if (distance_to_goal < this->GetWaypointReachThreshold()) {
-          ROS_INFO_STREAM("Distance: " << distance_to_goal);
+      // X. Check if waypoint has to be updated.
+      if (distance_to_goal < this->GetWaypointReachThreshold()) {
+        ROS_INFO_STREAM("Distance: " << distance_to_goal);
+        if (robot_behavior_state_ == RobotBehaviors::WAYPOINT_NAV) {
           robot_behavior_state_ = RobotBehaviors::WAYPOINT_REACHED_GOAL;
           break;
-        } else if (next_waypoint_->waypoint_type_ ==
-                       WayPointType::WAIT_OBSTACLE &&
-                   tube1_obst_dist_ < TUBE1_OBST_DIST) {
-          robot_behavior_state_ = RobotBehaviors::WAIT_OBSTACLE;
-          target_waypoint_index_ = target_waypoint_index_ - 1;
+        } else {
           break;
         }
-
-        rate_.sleep();
-        ros::spinOnce();
       }
+      rate_.sleep();
+      ros::spinOnce();
     }
 
     // X. Decide next action.
@@ -436,9 +445,12 @@ void CirkitWaypointNavigator::Run() {
       }
       break;
     }
-    case RobotBehaviors::WAIT_OBSTACLE: {
-      ROS_INFO("WAIT OBSTACLE");
+    case RobotBehaviors::WAYPOINT_NAV_PLANNING_ABORTED: {
+      ROS_INFO("!! WAYPOINT_NAV_PLANNING_ABORTED !!");
+      // Cancel current goal.
       this->CancelGoal();
+      target_waypoint_index_ -= 1;
+      break;
     }
     default: {
       ROS_WARN_STREAM("!! UNKNOWN STATE !!");
