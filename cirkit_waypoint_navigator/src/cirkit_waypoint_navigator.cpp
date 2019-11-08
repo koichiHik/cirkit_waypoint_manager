@@ -47,6 +47,7 @@ enum State {
   WAYPOINT_NAV,
   WAYPOINT_REACHED_GOAL,
   WAYPOINT_NAV_PLANNING_ABORTED,
+  GET_CLOSE_TO_OBSTACLE,
   WAIT_OBSTACLE,
 };
 }
@@ -127,6 +128,7 @@ private:
   ros::Subscriber local_cost_map_sub_;
   std::shared_ptr<WayPoint> next_waypoint_;
   double tube1_obst_dist_, tube2_obst_dist_;
+  geometry_msgs::Pose tmp_goal_;
 };
 
 CirkitWaypointNavigator::CirkitWaypointNavigator()
@@ -285,7 +287,7 @@ geometry_msgs::Pose CirkitWaypointNavigator::GetCurrentGoalPosition() {
   return now_goal_;
 }
 
-bool FindNearestObstableInTube(const cv::Mat &rotated_mat, double resolution,
+bool FindNearestObstacleInTube(const cv::Mat &rotated_mat, double resolution,
                                double tube_width, double &dist_to_obst) {
 
   static const int8_t OBSTACLE_VALUE = 100;
@@ -340,13 +342,22 @@ void CirkitWaypointNavigator::HandleLocalCostMap(
   cv::warpAffine(mat, rotated_mat, rot, cv::Size(cols, rows),
                  cv::INTER_NEAREST);
 
-  bool obst_found_in_tube1 = FindNearestObstableInTube(
+  bool obst_found_in_tube1 = FindNearestObstacleInTube(
       rotated_mat, grid_map->info.resolution, 0.8, tube1_obst_dist_);
-  bool obst_found_in_tube2 = FindNearestObstableInTube(
+  bool obst_found_in_tube2 = FindNearestObstacleInTube(
       rotated_mat, grid_map->info.resolution, 2.0, tube2_obst_dist_);
 
   double dist_waypoint = std::sqrt((next_y - robo_y) * (next_y - robo_y) +
                                    (next_x - robo_x) * (next_x - robo_x));
+
+  if (obst_found_in_tube1 < dist_waypoint) {
+    double ratio = obst_found_in_tube1 / dist_waypoint;
+    double tmp_x = (next_x - robo_x) * ratio + robo_x;
+    double tmp_y = (next_y - robo_y) * ratio * robo_y;
+    tmp_goal_.position.x = tmp_x;
+    tmp_goal_.position.y = tmp_y;
+    tmp_goal_.orientation = next_waypoint_->goal_.target_pose.pose.orientation;
+  }
 }
 
 void CirkitWaypointNavigator::Run() {
@@ -370,16 +381,20 @@ void CirkitWaypointNavigator::Run() {
 
     // X. Wait till obstacle to be removed.
     if (next_waypoint_->waypoint_type_ == WayPointType::WAIT_OBSTACLE) {
-      while (ros::ok()) {
 
-        ROS_INFO("Waiting obstable to be removed....");
-        if (TUBE1_OBST_DIST < tube1_obst_dist_) {
-          ROS_INFO("Obstable removed! Start moving!");
-          break;
+      if (tube1_obst_dist_ < TUBE1_OBST_DIST) {
+
+        while (ros::ok()) {
+
+          ROS_INFO("Waiting obstable to be removed....");
+          if (TUBE1_OBST_DIST < tube1_obst_dist_) {
+            ROS_INFO("Obstable removed! Start moving!");
+            break;
+          }
+
+          rate_.sleep();
+          ros::spinOnce();
         }
-
-        rate_.sleep();
-        ros::spinOnce();
       }
     }
 
