@@ -83,7 +83,10 @@ public:
     waypoint_marker.type = visualization_msgs::Marker::ARROW;
     waypoint_marker.action = visualization_msgs::Marker::ADD;
     waypoint_marker.pose = new_pose.pose;
-    waypoint_marker.scale.x = 0.8;
+    // waypoint_marker.scale.x = 0.8;
+    waypoint_marker.scale.x = 0.1;
+    // waypoint_marker.scale.y = 0.5;
+    waypoint_marker.scale.x = 0.0625;
     waypoint_marker.scale.y = 0.5;
     waypoint_marker.scale.z = 0.0;
     waypoint_marker.color.a = 0.7;
