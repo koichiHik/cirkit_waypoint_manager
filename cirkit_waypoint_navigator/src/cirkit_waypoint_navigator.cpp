@@ -180,7 +180,7 @@ void DynamicReconfigureForLocalPlanner(WayPointType type) {
     }
   }
 
-  ros::service::call("/move_base/TebLocalPlannerROS/parameter_updates",
+  ros::service::call("/move_base/TebLocalPlannerROS/set_parameters",
                      reconfigure_req, reconfigure_res);
 }
 
