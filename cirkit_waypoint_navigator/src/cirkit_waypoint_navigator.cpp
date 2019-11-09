@@ -58,9 +58,11 @@ enum State {
 }
 
 enum WayPointType {
-  NORMAL,
-  WAIT_USER_INPUT,
-  WAIT_OBSTACLE,
+  VELOCITY_FAST,                 // 0
+  WAIT_USER_INPUT_VELOCITY_FAST, // 1
+  ROBOT_QUEUE_VELOCITY_SLOW,     // 2
+  NARROW_WAY_VELOCITY_MIDDLE,    // 3
+  ARROUND_STOPLINE,              // 4
 };
 
 class WayPoint {
@@ -76,7 +78,7 @@ public:
   bool WaitUserInput() {
     bool tmp_user_input_received_ = user_input_received_;
     user_input_received_ = true;
-    return waypoint_type_ == WayPointType::WAIT_USER_INPUT &&
+    return waypoint_type_ == WayPointType::WAIT_USER_INPUT_VELOCITY_FAST &&
            !tmp_user_input_received_;
   }
   move_base_msgs::MoveBaseGoal goal_;
@@ -85,25 +87,101 @@ public:
   bool user_input_received_;
 };
 
-void DynamicReconfigureForLocalPlanner() {
+void SetDoubleParam(const std::string name, double value,
+                    dynamic_reconfigure::Config &conf) {
+  dynamic_reconfigure::DoubleParameter double_param;
+  double_param.name = name;
+  double_param.value = value;
+  conf.doubles.push_back(double_param);
+}
+
+void DynamicReconfigureForLocalPlanner(WayPointType type) {
 
   dynamic_reconfigure::ReconfigureRequest reconfigure_req;
   dynamic_reconfigure::ReconfigureResponse reconfigure_res;
   dynamic_reconfigure::DoubleParameter double_param;
   dynamic_reconfigure::Config conf;
 
-  double_param.name = "max_vel_x";
-  double_param.value = 1.0;
-  conf.doubles.push_back(double_param);
+  if (type == WayPointType::VELOCITY_FAST ||
+      WayPointType::WAIT_USER_INPUT_VELOCITY_FAST) {
 
-  reconfigure_req.config = conf;
+    // Velocity and Acceleration.
+    {
+      SetDoubleParam("max_vel_x", 0.6, conf);
+      SetDoubleParam("max_vel_y", 0.1, conf);
+      SetDoubleParam("max_vel_theta", 0.3, conf);
+      SetDoubleParam("acc_lim_x", 0.5, conf);
+      SetDoubleParam("acc_lim_y", 0.2, conf);
+      SetDoubleParam("acc_lim_theta", 0.5, conf);
+    }
+
+    // Goal Distance
+    {
+      SetDoubleParam("xy_goal_tolerance", 0.2, conf);
+      SetDoubleParam("yaw_goal_tolerance", 0.1, conf);
+    }
+
+    // Obstacle Treatment
+    {
+      SetDoubleParam("min_obstacle_dist", 0.5, conf);
+      SetDoubleParam("inflation_dist", 0.6, conf);
+      SetDoubleParam("dynamic_obstacle_inflation_dist", 0.6, conf);
+    }
+
+  } else if (type == WayPointType::ROBOT_QUEUE_VELOCITY_SLOW ||
+             type == WayPointType::ARROUND_STOPLINE) {
+
+    // Velocity and Acceleration.
+    {
+      SetDoubleParam("max_vel_x", 0.15, conf);
+      SetDoubleParam("max_vel_y", 0.05, conf);
+      SetDoubleParam("max_vel_theta", 0.1, conf);
+      SetDoubleParam("acc_lim_x", 0.1, conf);
+      SetDoubleParam("acc_lim_y", 0.05, conf);
+      SetDoubleParam("acc_lim_theta", 0.2, conf);
+    }
+
+    // Goal Distance
+    {
+      SetDoubleParam("xy_goal_tolerance", 0.1, conf);
+      SetDoubleParam("yaw_goal_tolerance", 0.05, conf);
+    }
+
+    // Obstacle Treatment
+    {
+      SetDoubleParam("min_obstacle_dist", 0.15, conf);
+      SetDoubleParam("inflation_dist", 0.1, conf);
+      SetDoubleParam("dynamic_obstacle_inflation_dist", 0.1, conf);
+    }
+
+  } else if (type == WayPointType::NARROW_WAY_VELOCITY_MIDDLE) {
+
+    // Velocity and Acceleration.
+    {
+      SetDoubleParam("max_vel_x", 0.3, conf);
+      SetDoubleParam("max_vel_y", 0.05, conf);
+      SetDoubleParam("max_vel_theta", 0.2, conf);
+      SetDoubleParam("acc_lim_x", 0.3, conf);
+      SetDoubleParam("acc_lim_y", 0.1, conf);
+      SetDoubleParam("acc_lim_theta", 0.2, conf);
+    }
+
+    // Goal Distance
+    {
+      SetDoubleParam("xy_goal_tolerance", 0.15, conf);
+      SetDoubleParam("yaw_goal_tolerance", 0.1, conf);
+    }
+
+    // Obstacle Treatment
+    {
+      SetDoubleParam("min_obstacle_dist", 0.15, conf);
+      SetDoubleParam("inflation_dist", 0.1, conf);
+      SetDoubleParam("dynamic_obstacle_inflation_dist", 0.1, conf);
+    }
+  }
 
   ros::service::call("/move_base/TebLocalPlannerROS/parameter_updates",
                      reconfigure_req, reconfigure_res);
-
-  for (auto double_p : reconfigure_res.config.doubles) {
-    ROS_ERROR("%s : %lf", double_p.name.c_str(), double_p.value);
-  }
 }
 
 class CirkitWaypointNavigator {
@@ -392,7 +470,8 @@ void CirkitWaypointNavigator::Run() {
   while (ros::ok()) {
     next_waypoint_ = this->RetrieveNextWaypoint();
 
-    DynamicReconfigureForLocalPlanner();
+    // X. Adjust local planner parameter.
+    DynamicReconfigureForLocalPlanner(next_waypoint_->waypoint_type_);
 
     // X. Wait user input if necessary.
     if (next_waypoint_->WaitUserInput()) {
@@ -404,6 +483,7 @@ void CirkitWaypointNavigator::Run() {
       getchar();
     }
 
+    /*
     // X. Wait till obstacle to be removed.
     if (next_waypoint_->waypoint_type_ == WayPointType::WAIT_OBSTACLE) {
       if (tube1_obst_dist_ < TUBE1_OBST_DIST) {
@@ -419,6 +499,7 @@ void CirkitWaypointNavigator::Run() {
         }
       }
     }
+    */
 
     // X. Consume current waypoint.
     {
@@ -448,12 +529,6 @@ void CirkitWaypointNavigator::Run() {
         if (distance_to_goal < this->GetWaypointReachThreshold()) {
           ROS_INFO_STREAM("Distance: " << distance_to_goal);
           robot_behavior_state_ = RobotBehaviors::WAYPOINT_REACHED_GOAL;
-          break;
-        } else if (next_waypoint_->waypoint_type_ ==
-                       WayPointType::WAIT_OBSTACLE &&
-                   tube1_obst_dist_ < TUBE1_OBST_DIST) {
-          robot_behavior_state_ = RobotBehaviors::WAIT_OBSTACLE;
-          target_waypoint_index_ = target_waypoint_index_ - 1;
           break;
         }
 
