@@ -19,6 +19,11 @@ read_csv.cpp : https://gist.github.com/yoneken/5765597#file-read_csv-cpp
 #include <tf/transform_listener.h>
 #include <visualization_msgs/Marker.h>
 
+// Dynamic Reconfigure.
+#include <dynamic_reconfigure/DoubleParameter.h>
+#include <dynamic_reconfigure/Reconfigure.h>
+#include <dynamic_reconfigure/client.h>
+
 #include <boost/shared_array.hpp>
 #include <boost/tokenizer.hpp>
 
@@ -79,6 +84,27 @@ public:
   double reach_threshold_;
   bool user_input_received_;
 };
+
+void DynamicReconfigureForLocalPlanner() {
+
+  dynamic_reconfigure::ReconfigureRequest reconfigure_req;
+  dynamic_reconfigure::ReconfigureResponse reconfigure_res;
+  dynamic_reconfigure::DoubleParameter double_param;
+  dynamic_reconfigure::Config conf;
+
+  double_param.name = "max_vel_x";
+  double_param.value = 1.0;
+  conf.doubles.push_back(double_param);
+
+  reconfigure_req.config = conf;
+
+  ros::service::call("/move_base/TebLocalPlannerROS/parameter_updates",
+                     reconfigure_req, reconfigure_res);
+
+  for (auto double_p : reconfigure_res.config.doubles) {
+    ROS_ERROR("%s : %lf", double_p.name.c_str(), double_p.value);
+  }
+}
 
 class CirkitWaypointNavigator {
 public:
@@ -289,7 +315,6 @@ geometry_msgs::Pose CirkitWaypointNavigator::GetCurrentGoalPosition() {
 
 bool FindNearestObstacleInTube(const cv::Mat &rotated_mat, double resolution,
                                double tube_width, double &dist_to_obst) {
-
   static const int8_t OBSTACLE_VALUE = 100;
   static const double OBSTACLE_NOT_FOUND = 100.0;
 
@@ -315,7 +340,6 @@ bool FindNearestObstacleInTube(const cv::Mat &rotated_mat, double resolution,
 
 void CirkitWaypointNavigator::HandleLocalCostMap(
     const nav_msgs::OccupancyGridConstPtr &grid_map) {
-
   int cols = grid_map->info.width;
   int rows = grid_map->info.height;
 
@@ -366,8 +390,9 @@ void CirkitWaypointNavigator::Run() {
 
   // X. Process running loop.
   while (ros::ok()) {
-
     next_waypoint_ = this->RetrieveNextWaypoint();
+
+    DynamicReconfigureForLocalPlanner();
 
     // X. Wait user input if necessary.
     if (next_waypoint_->WaitUserInput()) {
@@ -381,11 +406,8 @@ void CirkitWaypointNavigator::Run() {
 
     // X. Wait till obstacle to be removed.
     if (next_waypoint_->waypoint_type_ == WayPointType::WAIT_OBSTACLE) {
-
       if (tube1_obst_dist_ < TUBE1_OBST_DIST) {
-
         while (ros::ok()) {
-
           ROS_INFO("Waiting obstable to be removed....");
           if (TUBE1_OBST_DIST < tube1_obst_dist_) {
             ROS_INFO("Obstable removed! Start moving!");
