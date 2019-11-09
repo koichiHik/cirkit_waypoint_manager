@@ -92,18 +92,14 @@ void DynamicReconfigureForLocalPlanner() {
   dynamic_reconfigure::DoubleParameter double_param;
   dynamic_reconfigure::Config conf;
 
-  double_param.name = "max_vel_x";
+  double_param.name = "max_vel_x_backwards";
   double_param.value = 1.0;
   conf.doubles.push_back(double_param);
 
   reconfigure_req.config = conf;
 
-  ros::service::call("/move_base/TebLocalPlannerROS/parameter_updates",
+  ros::service::call("/move_base/TebLocalPlannerROS/set_parameters",
                      reconfigure_req, reconfigure_res);
-
-  for (auto double_p : reconfigure_res.config.doubles) {
-    ROS_ERROR("%s : %lf", double_p.name.c_str(), double_p.value);
-  }
 }
 
 class CirkitWaypointNavigator {
